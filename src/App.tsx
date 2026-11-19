@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, ReactNode, TouchEvent as ReactTouchEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight, Award, Bath, Check, ChevronDown, Clock3, Droplets, Flame,
   Facebook, Gauge, Home as HomeIcon, Instagram, Mail, MapPin, Menu, Phone, ShieldCheck, Sparkles, Star,
@@ -129,24 +129,63 @@ function ServicesGrid({ limit }: { limit?: number }) { const shown = limit ? ser
 function Stats() { const stats = [['1200+', 'jobs completed'], ['30 min', 'average response'], ['5.0', 'Google rating'], ['24/7', 'availability']]; return <section className="stats-band"><div className="shell stats-grid">{stats.map(([number, label]) => <div key={label} className="stat"><strong>{number}</strong><span>{label}</span></div>)}</div></section>; }
 function AreasPreview() { return <section className="section area-section"><div className="shell split-heading"><div><span className="eyebrow">Close to home</span><h2>Good plumbing travels<br /><em>locally.</em></h2></div><div><p>Based in Barrack Heights, we cover a 40 kilometre radius across the Illawarra. That means a local response, a familiar team and someone who understands the homes in your area.</p><a className="text-link" href="/service-areas">See all service areas <ArrowRight size={16} /></a></div></div><div className="shell area-layout"><div className="coverage-card"><div className="coverage-ring ring-one" /><div className="coverage-ring ring-two" /><div className="coverage-center"><MapPin size={22} /><b>Barrack Heights</b><small>40km local radius</small></div></div><div className="area-list">{locations.map((location, i) => <a href={`/locations/${location.slug}`} key={location.slug}><span>0{i + 1}</span><b>{location.name}</b><ArrowRight size={16} /></a>)}</div></div></section>; }
 function Process() { return <section className="section process-section"><div className="shell split-heading"><div><span className="eyebrow">The Turquoise standard</span><h2>A better experience<br /><em>from the first call.</em></h2></div><p>Good service is more than a quick fix. We bring clear communication, careful work and respect for your home to every job.</p></div><div className="shell process-grid">{[['01', 'Call or enquire', 'Tell us what is happening. We will ask the right questions and help you understand the next step.'], ['02', 'We arrive prepared', 'We show up ready to diagnose the problem and protect the surrounding space.'], ['03', 'A clear plan', 'You get practical options and upfront pricing before work begins.'], ['04', 'Job complete', 'We test the repair, tidy the area and make sure you are comfortable with the result.']].map(([number, title, text]) => <Reveal className="process-step" key={number}><span>{number}</span><h3>{title}</h3><p>{text}</p></Reveal>)}</div></section>; }
+type LiveReview = { rating: number; text: string; when?: string; author?: string; authorUrl?: string; photo?: string };
+type LiveReviews = { rating?: number; count?: number; url?: string; writeUrl?: string; reviews: LiveReview[] };
+type Slide = { name: string; quote: string; location: string; rating: number; authorUrl?: string; photo?: string };
+
+// Live Google reviews from /api/reviews (Places API). Google's terms forbid storing review text, so they are
+// fetched when the section nears the screen; the hand-picked reviews below show if Google cannot be reached.
+function useLiveReviews(ref: { current: HTMLElement | null }) {
+  const [data, setData] = useState<LiveReviews | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let done = false;
+    const load = () => { if (done) return; done = true; fetch('/api/reviews').then(r => (r.ok ? r.json() : null)).then((j: LiveReviews | null) => { if (j && j.reviews && j.reviews.length) setData(j); }).catch(() => {}); };
+    if (!('IntersectionObserver' in window)) { load(); return; }
+    const io = new IntersectionObserver(entries => { if (entries[0].isIntersecting) { io.disconnect(); load(); } }, { rootMargin: '600px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref]);
+  return data;
+}
+
 function Testimonials() {
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const live = useLiveReviews(sectionRef);
+  const slides: Slide[] = live
+    ? live.reviews.map(r => ({ name: r.author || 'Google user', quote: r.text, location: r.when ? `Google review, ${r.when}` : 'Google review', rating: r.rating || 5, authorUrl: r.authorUrl, photo: r.photo }))
+    : reviews.map(r => ({ ...r, rating: 5 }));
   const [active, setActive] = useState(0);
+  const [open, setOpen] = useState<number | null>(null);
   const [touchStart, setTouchStart] = useState<number | null>(null);
-  const go = (dir: number) => setActive(prev => (prev + dir + reviews.length) % reviews.length);
+  const [clamped, setClamped] = useState<number[]>([]);
+  useEffect(() => { setActive(0); setOpen(null); }, [live]);
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const measure = () => setClamped(Array.from(el.querySelectorAll('.review-card p')).map((q, i) => (q.scrollHeight > q.clientHeight + 2 ? i : -1)).filter(i => i >= 0));
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [live]);
+  const go = (dir: number) => { setOpen(null); setActive(prev => (prev + dir + slides.length) % slides.length); };
   const onTouchStart = (e: ReactTouchEvent<HTMLDivElement>) => setTouchStart(e.touches[0].clientX);
   const onTouchEnd = (e: ReactTouchEvent<HTMLDivElement>) => { if (touchStart === null) return; const diff = touchStart - e.changedTouches[0].clientX; if (Math.abs(diff) > 40) go(diff > 0 ? 1 : -1); setTouchStart(null); };
-  return <section className="section testimonials-section"><div className="shell"><div className="section-heading centered"><span className="eyebrow">Kind words from local homes</span><h2>Good work gets <em>noticed.</em></h2></div>
+  return <section className="section testimonials-section" ref={sectionRef}><div className="shell"><div className="section-heading centered"><span className="eyebrow">Kind words from local homes</span><h2>Good work gets <em>noticed.</em></h2></div>
+    {live && live.rating ? <div className="review-summary"><strong>{live.rating.toFixed(1)}</strong><span className="stars" aria-hidden="true">{'★'.repeat(Math.round(live.rating))}</span><span>{live.count ? `from ${live.count} Google reviews` : 'on Google'}</span></div> : null}
     <div className="review-carousel" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
       <div className="review-track" style={{ transform: `translateX(-${active * 100}%)` }}>
-        {reviews.map((review) => <div className="review-slide" key={review.name}><div className="review-card"><div className="stars">★★★★★</div><p>{review.quote}</p><div className="testimonial-meta"><div className="avatar">{review.name[0]}</div><span><b>{review.name}</b><small>{review.location}</small></span></div></div></div>)}
+        {slides.map((review, i) => <div className="review-slide" key={`${review.name}-${i}`}><div className={`review-card ${open === i ? 'is-open' : ''}`}><div className="stars" role="img" aria-label={`${review.rating} out of 5 stars`}>{'★'.repeat(Math.max(1, Math.min(5, Math.round(review.rating))))}</div><p>{review.quote}</p>{clamped.includes(i) || open === i ? <button className="review-more" onClick={() => setOpen(open === i ? null : i)}>{open === i ? 'Show less' : 'Read more'}</button> : null}<div className="testimonial-meta">{review.photo ? <img className="avatar avatar-photo" src={review.photo} alt="" width={34} height={34} loading="lazy" referrerPolicy="no-referrer" /> : <div className="avatar">{review.name[0]}</div>}<span>{review.authorUrl ? <a href={review.authorUrl} target="_blank" rel="noreferrer"><b>{review.name}</b></a> : <b>{review.name}</b>}<small>{review.location}</small></span></div></div></div>)}
       </div>
       <div className="review-nav">
         <button onClick={() => go(-1)} aria-label="Previous review"><ChevronDown size={20} className="review-nav-prev" /></button>
-        <div className="review-dots">{reviews.map((_, i) => <button key={i} className={`review-dot ${i === active ? 'active' : ''}`} onClick={() => setActive(i)} aria-label={`Go to review ${i + 1}`} />)}</div>
+        <div className="review-dots">{slides.map((_, i) => <button key={i} className={`review-dot ${i === active ? 'active' : ''}`} onClick={() => { setOpen(null); setActive(i); }} aria-label={`Go to review ${i + 1}`} />)}</div>
         <button onClick={() => go(1)} aria-label="Next review"><ChevronDown size={20} className="review-nav-next" /></button>
       </div>
     </div>
-    <div className="center-link"><a className="text-link" href={reviewsUrl} target="_blank" rel="noreferrer">Read our Google reviews <ArrowRight size={16} /></a></div>
+    {live ? <p className="review-attr">Most relevant reviews, from Google Maps</p> : null}
+    <div className="center-link review-links"><a className="text-link" href={(live && live.url) || reviewsUrl} target="_blank" rel="noreferrer">Read all our Google reviews <ArrowRight size={16} /></a><a className="text-link" href={reviewUrl} target="_blank" rel="noreferrer">Leave us a review <ArrowRight size={16} /></a></div>
   </div></section>;
 }
 function FAQ({ items = faqs }: { items?: string[][] }) { const [active, setActive] = useState<number | null>(null); return <div className="faq-list">{items.map(([question, answer], index) => <div className={`faq-item ${active === index ? 'active' : ''}`} key={question}><button onClick={() => setActive(active === index ? null : index)}><span>{question}</span><ChevronDown size={18} /></button><div className="faq-answer"><p>{answer}</p></div></div>)}</div>; }
